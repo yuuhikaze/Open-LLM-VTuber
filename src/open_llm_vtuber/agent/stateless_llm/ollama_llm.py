@@ -15,10 +15,14 @@ class OllamaLLM(AsyncLLM):
         temperature: float = 1.0,
         keep_alive: float = -1,
         unload_at_exit: bool = True,
+        think: bool = True,
     ):
         self.keep_alive = keep_alive
         self.unload_at_exit = unload_at_exit
         self.cleaned = False
+        extra_body = {}
+        if not think:
+            extra_body["think"] = False
         super().__init__(
             model=model,
             base_url=base_url,
@@ -26,6 +30,7 @@ class OllamaLLM(AsyncLLM):
             organization_id=organization_id,
             project_id=project_id,
             temperature=temperature,
+            extra_body=extra_body or None,
         )
         try:
             # preload model

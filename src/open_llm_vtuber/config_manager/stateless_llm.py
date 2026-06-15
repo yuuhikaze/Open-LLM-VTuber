@@ -96,6 +96,7 @@ class OllamaConfig(OpenAICompatibleConfig):
     llm_api_key: str = Field("default_api_key", alias="llm_api_key")
     keep_alive: float = Field(-1, alias="keep_alive")
     unload_at_exit: bool = Field(True, alias="unload_at_exit")
+    think: bool = Field(True, alias="think")
     interrupt_method: Literal["system", "user"] = Field(
         "system", alias="interrupt_method"
     )
@@ -114,6 +115,11 @@ class OllamaConfig(OpenAICompatibleConfig):
         "unload_at_exit": Description(
             en="Unload the model when the program exits.",
             zh="是否在程序退出时卸载模型。",
+        ),
+        "think": Description(
+            en="Enable extended thinking for reasoning models. "
+            "Set to false to disable <think> reasoning and reduce latency.",
+            zh="启用推理模型的扩展思考。设置为 false 以禁用 <think> 推理并减少延迟。",
         ),
     }
 
