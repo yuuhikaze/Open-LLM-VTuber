@@ -1,4 +1,9 @@
+import json
 from typing import AsyncIterator, List, Dict, Any
+
+import httpx
+from loguru import logger
+
 from .agent_interface import AgentInterface
 from ..output_types import SentenceOutput
 from ..transformers import (
@@ -9,7 +14,6 @@ from ..transformers import (
 )
 from ...config_manager import TTSPreprocessorConfig
 from ..input_types import BatchInput, TextSource
-from letta_client import Letta
 
 
 class LettaAgent(AgentInterface):
@@ -29,7 +33,6 @@ class LettaAgent(AgentInterface):
     ):
         super().__init__()
         self.url = f"http://{host}:{port}"
-        self.client = Letta(base_url=self.url)
         self.id = id
         # Initialize decorator parameters
         self._tts_preprocessor_config = tts_preprocessor_config
@@ -57,36 +60,41 @@ class LettaAgent(AgentInterface):
     def handle_interrupt(self, heard_response: str) -> None:
         pass
 
-    async def generator_to_async(self, gen):
-        for item in gen:
-            yield item
-
     async def chat(self, input_data: BatchInput) -> AsyncIterator[SentenceOutput]:
         messages = self._to_messages(input_data)
-        stream = self.generator_to_async(
-            self.client.agents.messages.create_stream(
-                agent_id=self.id,
-                messages=messages,
-                stream_tokens=True,
-            )
-        )
+        payload = {"messages": messages, "stream_tokens": True}
+        path = f"/v1/agents/{self.id}/messages/stream"
 
-        complete_response = ""
-        async for token in stream:
-            if token.message_type == "reasoning_message":
-                # This part is reasoning information and should not be displayed
-                token = token.reasoning
-                continue
-            elif token.message_type == "assistant_message":
-                # This part is the result that needs to be displayed, it is the final result
-                # logger.info('Test message')
-                # logger.info(token)
-                token = token.content
-            else:
-                continue
+        async with httpx.AsyncClient(base_url=self.url, timeout=None) as client:
+            async with client.stream("POST", path, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[len("data: ") :]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
 
-            yield token
-            complete_response += token
+                    mtype = event.get("message_type")
+                    if mtype == "assistant_message":
+                        content = event.get("content", "")
+                        if isinstance(content, list):
+                            content = "".join(
+                                part.get("text", "")
+                                for part in content
+                                if isinstance(part, dict)
+                            )
+                        if content:
+                            yield content
+                    elif mtype == "error_message":
+                        logger.error(
+                            f"Letta error: {event.get('detail') or event.get('message')}"
+                        )
+                        break
 
     def _to_text_prompt(self, input_data: BatchInput) -> str:
         """
