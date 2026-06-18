@@ -455,13 +455,25 @@ character_config:
 
     vllm_omni_tts: # vLLM-Omni TTS via OpenAI-compatible API (requires vllm-omni server)
       base_url: 'http://localhost:8091/v1'
-      model: 'qwen3-tts' # Model family for sample rate detection
-      voice: '' # Speaker name (e.g. 'Chelsie')
+      # Full HuggingFace identifier as loaded by vLLM-Omni. Selects the handler.
+      model: 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'
       language: 'Auto' # Language: Auto, Chinese, English, Japanese, Korean, etc.
-      task_type: 'Base' # Base, CustomVoice, or VoiceDesign
-      ref_audio: '' # Path to reference audio for Base (voice cloning)
-      ref_text: '' # Transcript of reference audio for Base (voice cloning)
-      instructions: '' # Voice description for VoiceDesign (e.g. 'A calm female voice')
+
+      # Pick ONE voice-selection block below. Each handler validates that the
+      # chosen mode is compatible with the model and errors otherwise.
+
+      # Mode 1 — preset voice by name.
+      voice_preset:
+        name: 'vivian'
+
+      # Mode 2 — voice cloning from a reference clip + transcript.
+      # voice_clone:
+      #   audio: 'file:///audio/voice.wav'
+      #   text: 'Transcript of the reference audio.'
+
+      # Mode 3 — free-form voice description prompt.
+      # voice_design:
+      #   prompt: 'female, energetic, slight rasp'
 
   # =================== Voice Activity Detection ===================
   vad_config:

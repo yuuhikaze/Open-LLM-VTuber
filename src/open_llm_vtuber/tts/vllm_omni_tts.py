@@ -1,80 +1,214 @@
+from abc import ABC, abstractmethod
+from typing import Optional
+
 import numpy as np
 import httpx
 from loguru import logger
 
 from .tts_interface import TTSInterface
 
-# Model-specific constants. Contributors: add new models here.
-MODEL_PRESETS = {
-    "qwen3-tts": {"sample_rate": 24000},
-}
+
+# ---------------------------------------------------------------------------
+# Handler ABC + concrete handlers
+#
+# A handler knows everything model-specific: sample rate, which payload fields
+# to send, and how to translate the user-facing voice modes (preset / clone /
+# design) into the model's own request schema.
+# ---------------------------------------------------------------------------
+
+
+class ModelHandler(ABC):
+    """Builds /v1/audio/speech payloads for one model family."""
+
+    sample_rate: int  # used by the engine for PCM chunk math
+
+    @abstractmethod
+    def build_payload(self, text: str, stream: bool) -> dict: ...
+
+
+def _get(obj, key, default=None):
+    """Read a field from either a Pydantic model or a plain dict."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+class Qwen3Handler(ModelHandler):
+    """Handler for the Qwen3-TTS family.
+
+    Qwen3 ships three model variants that each support exactly one voice mode:
+        -Base         → voice_clone   (ref_audio + ref_text)
+        -CustomVoice  → voice_preset  (named voice)
+        -VoiceDesign  → voice_design  (free-form prompt)
+    """
+
+    sample_rate = 24000
+    DEFAULT_PRESET = "vivian"
+
+    def __init__(
+        self,
+        model: str,
+        language: Optional[str] = None,
+        voice_preset=None,
+        voice_clone=None,
+        voice_design=None,
+    ):
+        modes = [m for m in (voice_preset, voice_clone, voice_design) if m]
+        if len(modes) > 1:
+            raise ValueError(
+                "voice_preset, voice_clone, and voice_design are mutually exclusive"
+            )
+
+        if voice_clone:
+            if not model.endswith("-Base"):
+                raise ValueError(
+                    f"voice_clone requires a Qwen3-*-Base model; got {model}"
+                )
+            self._task = "Base"
+            self._ref_audio = _get(voice_clone, "audio")
+            self._ref_text = _get(voice_clone, "text")
+            self._voice = self.DEFAULT_PRESET
+        elif voice_design:
+            if not model.endswith("-VoiceDesign"):
+                raise ValueError(
+                    f"voice_design requires a Qwen3-*-VoiceDesign model; got {model}"
+                )
+            self._task = "VoiceDesign"
+            self._instructions = _get(voice_design, "prompt")
+            self._voice = self.DEFAULT_PRESET
+        else:
+            if not model.endswith("-CustomVoice"):
+                raise ValueError(
+                    f"voice_preset requires a Qwen3-*-CustomVoice model; got {model}"
+                )
+            self._task = "CustomVoice"
+            self._voice = _get(voice_preset, "name") or self.DEFAULT_PRESET
+
+        self.model = model
+        self.language = language or "Auto"
+
+    def build_payload(self, text: str, stream: bool) -> dict:
+        payload = {
+            "model": self.model,
+            "input": text,
+            "voice": self._voice,
+            "stream": stream,
+            "response_format": "pcm" if stream else "wav",
+            "language": self.language,
+            "task_type": self._task,
+        }
+        if self._task == "Base":
+            payload["ref_audio"] = self._ref_audio
+            payload["ref_text"] = self._ref_text
+        elif self._task == "VoiceDesign":
+            payload["instructions"] = self._instructions
+        return payload
+
+
+class GenericHandler(ModelHandler):
+    """Fallback for any model without a dedicated handler.
+
+    Omits `model` from the payload — vLLM-Omni treats it as optional and
+    falls back to whichever model is currently loaded. Forwards voice preset
+    and language only. Voice cloning / design need a model-specific
+    translation, so they're rejected here.
+    """
+
+    sample_rate = 24000
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        language: Optional[str] = None,
+        voice_preset=None,
+        voice_clone=None,
+        voice_design=None,
+    ):
+        if voice_clone or voice_design:
+            raise ValueError(
+                "voice_clone/voice_design require a model with a registered "
+                f"handler; no handler for {model!r}"
+            )
+        self._voice = _get(voice_preset, "name") if voice_preset else None
+        self._language = language
+
+    def build_payload(self, text: str, stream: bool) -> dict:
+        payload = {
+            "input": text,
+            "stream": stream,
+            "response_format": "pcm" if stream else "wav",
+        }
+        if self._voice:
+            payload["voice"] = self._voice
+        if self._language:
+            payload["language"] = self._language
+        return payload
+
+
+# Registry: HF model-name prefix → handler class. First prefix match wins.
+# Add new families here; no other engine code needs to change.
+_HANDLERS: list[tuple[str, type[ModelHandler]]] = [
+    ("Qwen/Qwen3-TTS", Qwen3Handler),
+]
+
+
+def _pick_handler(model: Optional[str]) -> type[ModelHandler]:
+    if model:
+        for prefix, cls in _HANDLERS:
+            if model.startswith(prefix):
+                return cls
+    return GenericHandler
+
+
+# ---------------------------------------------------------------------------
+# Engine shell
+# ---------------------------------------------------------------------------
 
 
 class TTSEngine(TTSInterface):
-    """
-    TTS engine backed by a vLLM-Omni server.
+    """TTS engine backed by a vLLM-Omni server.
 
-    Streams raw PCM from POST /v1/audio/speech with stream=true and
-    response_format=pcm (16-bit signed mono). No local model loading
-    — pure HTTP client.
+    The engine itself is thin: it picks a handler from the configured `model`,
+    delegates payload construction to it, and handles the HTTP/streaming
+    transport. PCM chunk math uses the sample rate the handler reports.
     """
+
+    # Fixed for now; lifted to user-facing config later if a use case appears.
+    _CHUNK_SIZE_MS = 200
 
     def __init__(
         self,
         base_url: str = "http://localhost:8091/v1",
-        model: str = "qwen3-tts",
-        voice: str = "vivian",
-        language: str = "Auto",
-        task_type: str = "Base",
-        ref_audio: str = None,
-        ref_text: str = None,
-        instructions: str = None,
-        chunk_size_ms: int = 200,
+        model: Optional[str] = None,
+        language: Optional[str] = None,
+        voice_preset=None,
+        voice_clone=None,
+        voice_design=None,
         **kwargs,
     ):
-        if chunk_size_ms <= 0:
-            raise ValueError("chunk_size_ms must be > 0")
-
-        preset = MODEL_PRESETS.get(model)
-        if preset is None:
-            raise ValueError(
-                f"Unknown vLLM-Omni model '{model}'. "
-                f"Available: {', '.join(MODEL_PRESETS)}"
-            )
-
         self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.voice = voice
-        self.language = language
-        self.task_type = task_type
-        self.ref_audio = ref_audio
-        self.ref_text = ref_text
-        self.instructions = instructions
-        self.sample_rate = preset["sample_rate"]
+        handler_cls = _pick_handler(model)
+        self.handler = handler_cls(
+            model=model,
+            language=language,
+            voice_preset=voice_preset,
+            voice_clone=voice_clone,
+            voice_design=voice_design,
+        )
+        self.sample_rate = self.handler.sample_rate
         # Bytes per yielded chunk: 16-bit PCM, aligned to 2 bytes
-        self.chunk_bytes = (int(self.sample_rate * 2 * chunk_size_ms / 1000) // 2) * 2
+        self.chunk_bytes = (
+            int(self.sample_rate * 2 * self._CHUNK_SIZE_MS / 1000) // 2
+        ) * 2
         logger.info(
-            f"vLLM-Omni TTS initialized: {self.base_url} model={model} voice={voice} task_type={task_type}"
+            f"vLLM-Omni TTS initialized: {self.base_url} "
+            f"handler={handler_cls.__name__} model={model}"
         )
 
     def _build_payload(self, text: str, stream: bool) -> dict:
-        payload = {
-            "model": self.model,
-            "input": text,
-            "voice": self.voice,
-            "response_format": "pcm" if stream else "wav",
-            "stream": stream,
-            "language": self.language,
-            "task_type": self.task_type,
-        }
-        if self.task_type == "Base":
-            if self.ref_audio:
-                payload["ref_audio"] = self.ref_audio
-            if self.ref_text:
-                payload["ref_text"] = self.ref_text
-        if self.task_type == "VoiceDesign" and self.instructions:
-            payload["instructions"] = self.instructions
-        return payload
+        return self.handler.build_payload(text, stream)
 
     def generate_audio(self, text: str, file_name_no_ext=None) -> str:
         """Synchronous fallback: fetch full WAV and save to cache file."""
@@ -97,8 +231,7 @@ class TTSEngine(TTSInterface):
             return None
 
     async def async_generate_audio_streaming(self, text: str):
-        """
-        Async generator yielding (np.ndarray[float32], sample_rate) chunks.
+        """Async generator yielding (np.ndarray[float32], sample_rate) chunks.
 
         Streams raw 16-bit signed PCM at self.sample_rate Hz from vLLM-Omni,
         buffering into self.chunk_bytes-sized chunks before yielding.

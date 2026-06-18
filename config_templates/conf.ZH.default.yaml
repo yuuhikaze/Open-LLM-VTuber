@@ -450,13 +450,25 @@ character_config:
 
     vllm_omni_tts: # 通过 OpenAI 兼容 API 的 vLLM-Omni TTS（需要 vllm-omni 服务器）
       base_url: 'http://localhost:8091/v1'
-      model: 'qwen3-tts' # 用于采样率检测的模型系列
-      voice: '' # 说话人名称（如 'Chelsie'）
+      # vLLM-Omni 加载的完整 HuggingFace 模型标识符。用于选择处理器。
+      model: 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'
       language: 'Auto' # 语言：Auto、Chinese、English、Japanese、Korean 等
-      task_type: 'Base' # Base、CustomVoice 或 VoiceDesign
-      ref_audio: '' # Base（语音克隆）的参考音频路径
-      ref_text: '' # Base（语音克隆）的参考音频文字
-      instructions: '' # VoiceDesign 的语音描述（如 '温柔的女性声音'）
+
+      # 在下面三种语音选择模式中选择一种。每个处理器会校验所选模式
+      # 与模型是否兼容，不兼容时会立即报错。
+
+      # 模式 1 —— 通过名称选择预设语音。
+      voice_preset:
+        name: 'vivian'
+
+      # 模式 2 —— 通过参考音频 + 文本进行语音克隆。
+      # voice_clone:
+      #   audio: 'file:///audio/voice.wav'
+      #   text: '参考音频的文本转录。'
+
+      # 模式 3 —— 自由形式的语音描述提示。
+      # voice_design:
+      #   prompt: 'female, energetic, slight rasp'
 
   # =================== Voice Activity Detection ===================
   vad_config:

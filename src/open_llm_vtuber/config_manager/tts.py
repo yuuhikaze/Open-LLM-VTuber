@@ -481,55 +481,91 @@ class OpenAITTSConfig(I18nMixin):
     }
 
 
+class VoicePresetConfig(I18nMixin):
+    """Preset voice — pick a named voice from the model's voice catalog."""
+
+    name: str = Field(..., alias="name")
+
+    DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
+        "name": Description(
+            en="Preset voice name (e.g. 'vivian'). Available names depend on the model.",
+            zh="预设语音名称（如 'vivian'）。可用名称取决于模型。",
+        ),
+    }
+
+
+class VoiceCloneConfig(I18nMixin):
+    """Voice cloning — reference audio + its transcript."""
+
+    audio: str = Field(..., alias="audio")
+    text: str = Field(..., alias="text")
+
+    DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
+        "audio": Description(
+            en="Reference audio URL or data URI, e.g. file:///audio/voice.wav",
+            zh="参考音频 URL 或 data URI，例如 file:///audio/voice.wav",
+        ),
+        "text": Description(
+            en="Transcript of the reference audio",
+            zh="参考音频的文本转录",
+        ),
+    }
+
+
+class VoiceDesignConfig(I18nMixin):
+    """Voice design — natural-language description of the desired voice."""
+
+    prompt: str = Field(..., alias="prompt")
+
+    DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
+        "prompt": Description(
+            en="Free-form voice description, e.g. 'female, energetic, slight rasp'",
+            zh="自由形式的语音描述，例如 'female, energetic, slight rasp'",
+        ),
+    }
+
+
 class VllmOmniTTSConfig(I18nMixin):
-    """Configuration for vLLM-Omni TTS (Qwen3-TTS served via vLLM-Omni)."""
+    """Configuration for vLLM-Omni TTS.
+
+    Pick a model and exactly one voice-selection block (voice_preset,
+    voice_clone, or voice_design). Each handler validates that the chosen
+    mode is compatible with the model.
+    """
 
     base_url: str = Field("http://localhost:8091/v1", alias="base_url")
-    model: str = Field("qwen3-tts", alias="model")
-    voice: str = Field("vivian", alias="voice")
-    language: str = Field("Auto", alias="language")
-    task_type: str = Field("Base", alias="task_type")
-    ref_audio: Optional[str] = Field(None, alias="ref_audio")
-    ref_text: Optional[str] = Field(None, alias="ref_text")
-    instructions: Optional[str] = Field(None, alias="instructions")
-    chunk_size_ms: int = Field(200, alias="chunk_size_ms")
+    model: str = Field(..., alias="model")
+    language: Optional[str] = Field(None, alias="language")
+    voice_preset: Optional[VoicePresetConfig] = Field(None, alias="voice_preset")
+    voice_clone: Optional[VoiceCloneConfig] = Field(None, alias="voice_clone")
+    voice_design: Optional[VoiceDesignConfig] = Field(None, alias="voice_design")
 
     DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
         "base_url": Description(
             en="Base URL of the vLLM-Omni server",
             zh="vLLM-Omni 服务器的基础 URL",
         ),
-        "voice": Description(
-            en="Speaker name (CustomVoice) or description (VoiceDesign)",
-            zh="说话人名称（CustomVoice）或描述（VoiceDesign）",
+        "model": Description(
+            en="Full HuggingFace model identifier as loaded by vLLM-Omni "
+            "(e.g. 'Qwen/Qwen3-TTS-12Hz-1.7B-Base'). Selects the handler.",
+            zh="vLLM-Omni 加载的完整 HuggingFace 模型标识符 "
+            "（例如 'Qwen/Qwen3-TTS-12Hz-1.7B-Base'）。用于选择处理器。",
         ),
         "language": Description(
-            en="Language: Auto, English, Chinese, Spanish, etc.",
-            zh="语言：Auto、English、Chinese、Spanish 等",
+            en="Language hint: Auto, English, Chinese, Spanish, etc.",
+            zh="语言提示：Auto、English、Chinese、Spanish 等",
         ),
-        "task_type": Description(
-            en="Task type matching the loaded model: Base, CustomVoice, or VoiceDesign",
-            zh="与加载模型匹配的任务类型：Base、CustomVoice 或 VoiceDesign",
+        "voice_preset": Description(
+            en="Voice-selection mode: pick a named preset voice",
+            zh="语音选择模式：选择一个命名预设语音",
         ),
-        "ref_audio": Description(
-            en="Reference audio for voice cloning (Base model only), e.g. file:///audio/voice.wav",
-            zh="语音克隆参考音频（仅 Base 模型），如 file:///audio/voice.wav",
+        "voice_clone": Description(
+            en="Voice-selection mode: clone from a reference audio + transcript",
+            zh="语音选择模式：从参考音频和文本进行语音克隆",
         ),
-        "ref_text": Description(
-            en="Transcript of the reference audio (Base model only)",
-            zh="参考音频的文本转录（仅 Base 模型）",
-        ),
-        "instructions": Description(
-            en="Style/emotion guidance (VoiceDesign only)",
-            zh="风格/情感引导（仅 VoiceDesign）",
-        ),
-        "model": Description(
-            en="Model preset: qwen3-tts (determines sample rate and other constants)",
-            zh="模型预设：qwen3-tts（决定采样率等常量）",
-        ),
-        "chunk_size_ms": Description(
-            en="Size of each yielded PCM chunk in milliseconds (default 200)",
-            zh="每次产生的 PCM 块大小（毫秒，默认 200）",
+        "voice_design": Description(
+            en="Voice-selection mode: free-form voice description prompt",
+            zh="语音选择模式：自由形式的语音描述提示",
         ),
     }
 
