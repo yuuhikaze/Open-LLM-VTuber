@@ -176,7 +176,11 @@ class TTSEngine(TTSInterface):
     """
 
     # Fixed for now; lifted to user-facing config later if a use case appears.
-    _CHUNK_SIZE_MS = 200
+    # Measured against a live server: raw HTTP first-bytes arrive ~0.4s after
+    # the request, so every ms of client-side chunk buffering adds directly
+    # to time-to-first-audio. 100ms halves that penalty vs the previous
+    # 200ms while keeping the websocket message rate modest (~10/s).
+    _CHUNK_SIZE_MS = 100
 
     def __init__(
         self,
