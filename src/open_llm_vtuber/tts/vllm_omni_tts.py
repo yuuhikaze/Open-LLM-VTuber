@@ -46,6 +46,14 @@ class Qwen3Handler(ModelHandler):
 
     sample_rate = 24000
     DEFAULT_PRESET = "vivian"
+    # Size of the server's first code2wav decode block, in codec frames
+    # (12Hz codec → 8 frames ≈ 0.67s of audio). The server default uses a
+    # tiny initial block for minimal first-byte latency, but then delivers
+    # audio slower than realtime for the first few seconds — measured
+    # worst-case deficit ~2s of silence the client must insert somewhere.
+    # With 8, delivery never falls behind realtime (deficit 0.00s measured)
+    # for +0.2s first-byte latency.
+    INITIAL_CODEC_CHUNK_FRAMES = 8
 
     def __init__(
         self,
@@ -99,6 +107,8 @@ class Qwen3Handler(ModelHandler):
             "language": self.language,
             "task_type": self._task,
         }
+        if stream:
+            payload["initial_codec_chunk_frames"] = self.INITIAL_CODEC_CHUNK_FRAMES
         if self._task == "Base":
             payload["ref_audio"] = self._ref_audio
             payload["ref_text"] = self._ref_text
