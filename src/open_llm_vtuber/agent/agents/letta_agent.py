@@ -119,12 +119,12 @@ class LettaAgent(AgentInterface):
         return "\n".join(message_parts)
 
     @staticmethod
-    def _parse_data_url(data_url: str) -> tuple[str, str] | None:
-        """Parse a base64 data URL into (media_type, raw_base64)."""
-        match = re.match(r"^data:(image/\w+);base64,(.+)$", data_url)
+    def _parse_data_url(data_url: str) -> str | None:
+        """Extract the raw base64 payload from a data URL."""
+        match = re.match(r"^data:image/[^;]+;base64,(.+)$", data_url)
         if not match:
             return None
-        return match.group(1), match.group(2)
+        return match.group(1)
 
     def _to_messages(self, input_data: BatchInput) -> List[Dict[str, Any]]:
         """
@@ -139,16 +139,15 @@ class LettaAgent(AgentInterface):
 
             for img_data in input_data.images:
                 if isinstance(img_data.data, str):
-                    parsed = self._parse_data_url(img_data.data)
-                    if parsed is not None:
-                        media_type, raw_b64 = parsed
+                    raw_b64 = self._parse_data_url(img_data.data)
+                    if raw_b64 is not None:
                         content.append(
                             {
                                 "type": "image",
                                 "source": {
                                     "type": "base64",
                                     "data": raw_b64,
-                                    "media_type": media_type,
+                                    "media_type": img_data.mime_type,
                                 },
                             }
                         )
@@ -158,6 +157,12 @@ class LettaAgent(AgentInterface):
                             f"Expected a data: URL, got {img_data.data[:80]}…"
                         )
                         content.append({"type": "text", "text": "[Image]"})
+                else:
+                    logger.warning(
+                        f"Unexpected image data type ({type(img_data.data).__name__}), "
+                        f"skipping."
+                    )
+                    content.append({"type": "text", "text": "[Image]"})
 
             user_message = {"role": "user", "content": content}
         else:
