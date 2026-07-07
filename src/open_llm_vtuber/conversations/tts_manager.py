@@ -288,6 +288,12 @@ class TTSTaskManager:
 
     def clear(self) -> None:
         """Clear all pending tasks and reset state"""
+        # Cancel in-flight TTS tasks before dropping the references —
+        # otherwise a task from an interrupted turn keeps running and
+        # enqueues its (stale) payload into the replaced queue below,
+        # leaking a sentence from the previous turn into the next one.
+        for task in self.task_list:
+            task.cancel()
         self.task_list.clear()
         if self._sender_task:
             self._sender_task.cancel()
